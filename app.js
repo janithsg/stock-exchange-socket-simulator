@@ -14,6 +14,9 @@ const CONFIG = {
   // Table update configuration
   TABLE_ELEMENTS: 20,          // Total number of table elements to generate
   TABLE_UPDATES_PER_SECOND: 6, // Number of elements to push per second
+  
+  // Homepage update configuration
+  HOMEPAGE_UPDATE_INTERVAL: 3000, // How often to send homepage updates (ms)
 };
 
 // ============================================
@@ -45,10 +48,47 @@ let stockSymbols = [];
 let tableElements = [];
 let tableUpdateQueue = [];
 let currentTableIndex = 0;
+let homepageData = null;
 
 // ============================================
 // UTILITY FUNCTIONS
 // ============================================
+
+/**
+ * Generates a random value within a range
+ * @param {number} min - Minimum value
+ * @param {number} max - Maximum value
+ * @param {number} decimals - Number of decimal places (default: 2)
+ * @returns {number} Random value within range
+ */
+function randomInRange(min, max, decimals = 2) {
+  const value = Math.random() * (max - min) + min;
+  return parseFloat(value.toFixed(decimals));
+}
+
+/**
+ * Generates an array of random values for graph data
+ * @param {number} count - Number of values to generate
+ * @param {number} min - Minimum value
+ * @param {number} max - Maximum value
+ * @returns {Array<number>} Array of random values
+ */
+function generateGraphData(count, min, max) {
+  return Array.from({ length: count }, () => randomInRange(min, max, 2));
+}
+
+/**
+ * Updates graph data by adding new value and removing oldest
+ * @param {Array<number>} graphData - Current graph data array
+ * @param {number} newValue - New value to add
+ * @returns {Array<number>} Updated graph data
+ */
+function updateGraphData(graphData, newValue) {
+  const updated = [...graphData];
+  updated.shift(); // Remove first element
+  updated.push(newValue); // Add new value at end
+  return updated;
+}
 
 /**
  * Generates a random stock symbol
@@ -233,6 +273,92 @@ async function initializeTableElements() {
   console.log(`  Last Order: ${tableElements[0].last_order_qty} @ ${tableElements[0].last_order_value}`);
 }
 
+/**
+ * Initializes homepage data with default values
+ */
+async function initializeHomepageData() {
+  console.log('Initializing homepage data...');
+  
+  homepageData = {
+    main_balance: randomInRange(17200, 18300, 2),
+    market_value: randomInRange(10600, 10700, 2),
+    
+    holding1: {
+      avg: randomInRange(10, 100, 2),
+      change: randomInRange(0, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      value: randomInRange(1000, 3000, 2)
+    },
+    holding2: {
+      avg: randomInRange(10, 100, 2),
+      change: randomInRange(0, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      value: randomInRange(1000, 3000, 2)
+    },
+    holding3: {
+      avg: randomInRange(10, 100, 2),
+      change: randomInRange(0, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      value: randomInRange(1000, 3000, 2)
+    },
+    holding4: {
+      avg: randomInRange(10, 100, 2),
+      change: randomInRange(0, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      value: randomInRange(1000, 3000, 2)
+    },
+    
+    recommendation1: {
+      avg: randomInRange(10, 100, 2),
+      positive_change: randomInRange(10, 60, 2),
+      negative_change: randomInRange(10, 60, 2)
+    },
+    recommendation2: {
+      avg: randomInRange(10, 100, 2),
+      positive_change: randomInRange(10, 60, 2),
+      negative_change: randomInRange(10, 60, 2)
+    },
+    recommendation3: {
+      avg: randomInRange(10, 100, 2),
+      positive_change: randomInRange(10, 60, 2),
+      negative_change: randomInRange(10, 60, 2)
+    },
+    recommendation4: {
+      avg: randomInRange(10, 100, 2),
+      positive_change: randomInRange(10, 60, 2),
+      negative_change: randomInRange(10, 60, 2)
+    },
+    
+    fav1: {
+      price: randomInRange(10, 60, 2),
+      change: randomInRange(10, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      graph_data: generateGraphData(20, 10, 60)
+    },
+    fav2: {
+      price: randomInRange(10, 60, 2),
+      change: randomInRange(10, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      graph_data: generateGraphData(20, 10, 60)
+    },
+    fav3: {
+      price: randomInRange(10, 60, 2),
+      change: randomInRange(10, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      graph_data: generateGraphData(20, 10, 60)
+    },
+    fav4: {
+      price: randomInRange(10, 60, 2),
+      change: randomInRange(10, 60, 2),
+      impact_is_positive: Math.random() > 0.5,
+      graph_data: generateGraphData(20, 10, 60)
+    }
+  };
+  
+  console.log('Homepage data initialized successfully');
+  console.log(`Sample: Main Balance: ${homepageData.main_balance}, Market Value: ${homepageData.market_value}`);
+}
+
 // ============================================
 // STOCK UPDATE LOGIC
 // ============================================
@@ -296,6 +422,53 @@ async function startTableUpdates() {
   console.log(`Table updates started (${CONFIG.TABLE_UPDATES_PER_SECOND} elements/second)`);
 }
 
+/**
+ * Updates homepage data with new random values
+ */
+function updateHomepageData() {
+  homepageData.main_balance = randomInRange(17200, 18300, 2);
+  homepageData.market_value = randomInRange(10600, 10700, 2);
+  
+  // Update holdings
+  for (let i = 1; i <= 4; i++) {
+    const holding = homepageData[`holding${i}`];
+    holding.avg = randomInRange(10, 100, 2);
+    holding.change = randomInRange(0, 60, 2);
+    holding.impact_is_positive = Math.random() > 0.5;
+    holding.value = randomInRange(1000, 3000, 2);
+  }
+  
+  // Update recommendations
+  for (let i = 1; i <= 4; i++) {
+    const rec = homepageData[`recommendation${i}`];
+    rec.avg = randomInRange(10, 100, 2);
+    rec.positive_change = randomInRange(10, 60, 2);
+    rec.negative_change = randomInRange(10, 60, 2);
+  }
+  
+  // Update favorites
+  for (let i = 1; i <= 4; i++) {
+    const fav = homepageData[`fav${i}`];
+    const newPrice = randomInRange(10, 60, 2);
+    fav.price = newPrice;
+    fav.change = randomInRange(10, 60, 2);
+    fav.impact_is_positive = Math.random() > 0.5;
+    fav.graph_data = updateGraphData(fav.graph_data, newPrice);
+  }
+}
+
+/**
+ * Broadcasts homepage updates at configured interval
+ */
+async function startHomepageUpdates() {
+  setInterval(() => {
+    updateHomepageData();
+    io.emit('homepage_updates', homepageData);
+  }, CONFIG.HOMEPAGE_UPDATE_INTERVAL);
+  
+  console.log(`Homepage updates started (every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms)`);
+}
+
 // ============================================
 // SOCKET.IO EVENTS
 // ============================================
@@ -305,6 +478,7 @@ io.on('connection', (socket) => {
   
   // Send initial data immediately on connection
   socket.emit('stock_update', stockSymbols);
+  socket.emit('homepage_updates', homepageData);
   
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
@@ -313,6 +487,11 @@ io.on('connection', (socket) => {
   // Optional: Handle client requests for specific stocks
   socket.on('get_stocks', () => {
     socket.emit('stock_update', stockSymbols);
+  });
+  
+  // Optional: Handle client requests for homepage data
+  socket.on('get_homepage', () => {
+    socket.emit('homepage_updates', homepageData);
   });
 });
 
@@ -330,13 +509,15 @@ app.get('/', (req, res) => {
       broadcastInterval: `${CONFIG.BROADCAST_INTERVAL}ms`,
       stocksUpdatedPerCycle: CONFIG.STOCKS_TO_UPDATE,
       tableElements: CONFIG.TABLE_ELEMENTS,
-      tableUpdatesPerSecond: CONFIG.TABLE_UPDATES_PER_SECOND
+      tableUpdatesPerSecond: CONFIG.TABLE_UPDATES_PER_SECOND,
+      homepageUpdateInterval: `${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`
     },
     endpoints: {
       socketio: 'Connect via Socket.IO for real-time updates',
       events: {
         stock_update: 'Batch stock updates',
-        table_update: 'Individual table element updates'
+        table_update: 'Individual table element updates',
+        homepage_updates: 'Homepage data updates'
       }
     }
   });
@@ -365,10 +546,14 @@ async function startServer() {
     // Initialize table elements
     await initializeTableElements();
     
+    // Initialize homepage data
+    await initializeHomepageData();
+    
     // Start background processes
     await startStockUpdates();
     await startBroadcasting();
     await startTableUpdates();
+    await startHomepageUpdates();
     
     // Start server
     server.listen(CONFIG.PORT, () => {
@@ -376,9 +561,11 @@ async function startServer() {
       console.log(`🚀 Stock Exchange Simulator running on port ${CONFIG.PORT}`);
       console.log(`📊 Managing ${CONFIG.TOTAL_SYMBOLS} stock symbols`);
       console.log(`📋 Managing ${CONFIG.TABLE_ELEMENTS} table elements`);
+      console.log(`🏠 Homepage updates enabled`);
       console.log(`🔄 Update interval: ${CONFIG.UPDATE_INTERVAL}ms`);
       console.log(`📡 Broadcast interval: ${CONFIG.BROADCAST_INTERVAL}ms`);
       console.log(`📤 Table updates: ${CONFIG.TABLE_UPDATES_PER_SECOND}/second`);
+      console.log(`🏡 Homepage updates: every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`);
       console.log('='.repeat(50));
     });
   } catch (error) {
