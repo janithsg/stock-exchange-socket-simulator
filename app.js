@@ -17,6 +17,12 @@ const CONFIG = {
   
   // Homepage update configuration
   HOMEPAGE_UPDATE_INTERVAL: 3000, // How often to send homepage updates (ms)
+  
+  // Chart update configuration
+  CHART_UPDATE_INTERVAL: 200,     // How often to send chart updates (ms)
+  CHART_CANDLE_DURATION: 1000,    // Duration of each candle in ms (1 second)
+  CHART_BASE_PRICE: 150,          // Starting price for the chart
+  CHART_VOLATILITY: 0.02,         // Price volatility (2%)
 };
 
 // ============================================
@@ -49,6 +55,12 @@ let tableElements = [];
 let tableUpdateQueue = [];
 let currentTableIndex = 0;
 let homepageData = null;
+
+// Chart data storage
+let chartData = [];
+let currentCandle = null;
+let candleStartTime = null;
+let lastPrice = CONFIG.CHART_BASE_PRICE;
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -222,6 +234,155 @@ function getRandomIndices(count, max) {
   }
   
   return indices;
+}
+
+// ============================================
+// CHART FUNCTIONS
+// ============================================
+
+/**
+ * Generates a new price based on last price with random walk
+ * @param {number} lastPrice - Previous price
+ * @returns {number} New price
+ */
+function generateNewPrice(lastPrice) {
+  const change = (Math.random() * 2 - 1) * CONFIG.CHART_VOLATILITY;
+  const newPrice = lastPrice * (1 + change);
+  return parseFloat(newPrice.toFixed(2));
+}
+
+/**
+ * Initializes the first candle
+ */
+function initializeCandle() {
+  const now = Date.now();
+  candleStartTime = now;
+  
+  currentCandle = {
+    time: Math.floor(now / 1000), // Unix timestamp in seconds
+    open: lastPrice,
+    high: lastPrice,
+    low: lastPrice,
+    close: lastPrice,
+  };
+}
+
+/**
+ * Updates the current candle with a new price tick
+ * @param {number} price - New price
+ */
+function updateCurrentCandle(price) {
+  if (!currentCandle) {
+    initializeCandle();
+  }
+  
+  currentCandle.close = price;
+  currentCandle.high = Math.max(currentCandle.high, price);
+  currentCandle.low = Math.min(currentCandle.low, price);
+}
+
+/**
+ * Checks if it's time to complete the current candle and start a new one
+ * @returns {boolean} True if candle should be completed
+ */
+function shouldCompleteCandle() {
+  const now = Date.now();
+  return (now - candleStartTime) >= CONFIG.CHART_CANDLE_DURATION;
+}
+
+/**
+ * Completes the current candle and starts a new one
+ */
+function completeCandle() {
+  if (currentCandle) {
+    // Add completed candle to history
+    chartData.push({ ...currentCandle });
+    
+    // Keep only last 100 candles
+    if (chartData.length > 100) {
+      chartData.shift();
+    }
+    
+    // Start new candle
+    lastPrice = currentCandle.close;
+    initializeCandle();
+  }
+}
+
+/**
+ * Generates initial historical chart data
+ */
+function initializeChartData() {
+  console.log('Initializing chart data...');
+  
+  const now = Date.now();
+  const candlesCount = 50; // Generate 50 historical candles
+  
+  chartData = [];
+  let price = CONFIG.CHART_BASE_PRICE;
+  
+  for (let i = candlesCount; i > 0; i--) {
+    const candleTime = Math.floor((now - (i * CONFIG.CHART_CANDLE_DURATION)) / 1000);
+    
+    const open = price;
+    const close = generateNewPrice(open);
+    const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+    const low = Math.min(open, close) * (1 - Math.random() * 0.01);
+    
+    chartData.push({
+      time: candleTime,
+      open: parseFloat(open.toFixed(2)),
+      high: parseFloat(high.toFixed(2)),
+      low: parseFloat(low.toFixed(2)),
+      close: parseFloat(close.toFixed(2)),
+    });
+    
+    price = close;
+  }
+  
+  lastPrice = price;
+  initializeCandle();
+  
+  console.log(`Chart data initialized with ${chartData.length} candles`);
+  console.log(`Starting price: ${CONFIG.CHART_BASE_PRICE}, Current price: ${lastPrice.toFixed(2)}`);
+}
+
+/**
+ * Updates chart data and emits to clients
+ */
+function updateChartData() {
+  // Generate new price
+  const newPrice = generateNewPrice(lastPrice);
+  
+  // Update current candle
+  updateCurrentCandle(newPrice);
+  
+  // Check if we should complete the candle
+  if (shouldCompleteCandle()) {
+    completeCandle();
+  }
+  
+  lastPrice = newPrice;
+}
+
+/**
+ * Starts chart updates at configured interval
+ */
+function startChartUpdates() {
+  setInterval(() => {
+    updateChartData();
+    
+    // Emit current candle plus all historical data
+    const dataToSend = [...chartData];
+    if (currentCandle) {
+      dataToSend.push(currentCandle);
+    }
+    
+    io.emit('chart_update', dataToSend);
+  }, CONFIG.CHART_UPDATE_INTERVAL);
+  
+  console.log(`Chart updates started (every ${CONFIG.CHART_UPDATE_INTERVAL}ms)`);
+  console.log(`Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
 }
 
 // ============================================
@@ -480,6 +641,13 @@ io.on('connection', (socket) => {
   socket.emit('stock_update', stockSymbols);
   socket.emit('homepage_updates', homepageData);
   
+  // Send initial chart data
+  const initialChartData = [...chartData];
+  if (currentCandle) {
+    initialChartData.push(currentCandle);
+  }
+  socket.emit('chart_update', initialChartData);
+  
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
   });
@@ -492,6 +660,15 @@ io.on('connection', (socket) => {
   // Optional: Handle client requests for homepage data
   socket.on('get_homepage', () => {
     socket.emit('homepage_updates', homepageData);
+  });
+  
+  // Optional: Handle client requests for chart data
+  socket.on('get_chart', () => {
+    const chartDataToSend = [...chartData];
+    if (currentCandle) {
+      chartDataToSend.push(currentCandle);
+    }
+    socket.emit('chart_update', chartDataToSend);
   });
 });
 
@@ -510,14 +687,17 @@ app.get('/', (req, res) => {
       stocksUpdatedPerCycle: CONFIG.STOCKS_TO_UPDATE,
       tableElements: CONFIG.TABLE_ELEMENTS,
       tableUpdatesPerSecond: CONFIG.TABLE_UPDATES_PER_SECOND,
-      homepageUpdateInterval: `${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`
+      homepageUpdateInterval: `${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`,
+      chartUpdateInterval: `${CONFIG.CHART_UPDATE_INTERVAL}ms`,
+      candleDuration: `${CONFIG.CHART_CANDLE_DURATION}ms`
     },
     endpoints: {
       socketio: 'Connect via Socket.IO for real-time updates',
       events: {
         stock_update: 'Batch stock updates',
         table_update: 'Individual table element updates',
-        homepage_updates: 'Homepage data updates'
+        homepage_updates: 'Homepage data updates',
+        chart_update: 'Candlestick chart updates (every 200ms)'
       }
     }
   });
@@ -527,6 +707,18 @@ app.get('/stocks', (req, res) => {
   res.json({
     count: stockSymbols.length,
     stocks: stockSymbols
+  });
+});
+
+app.get('/chart', (req, res) => {
+  const chartDataToSend = [...chartData];
+  if (currentCandle) {
+    chartDataToSend.push(currentCandle);
+  }
+  res.json({
+    count: chartDataToSend.length,
+    data: chartDataToSend,
+    currentPrice: lastPrice
   });
 });
 
@@ -549,11 +741,15 @@ async function startServer() {
     // Initialize homepage data
     await initializeHomepageData();
     
+    // Initialize chart data
+    initializeChartData();
+    
     // Start background processes
     await startStockUpdates();
     await startBroadcasting();
     await startTableUpdates();
     await startHomepageUpdates();
+    startChartUpdates();
     
     // Start server
     server.listen(CONFIG.PORT, () => {
@@ -562,6 +758,8 @@ async function startServer() {
       console.log(`📊 Managing ${CONFIG.TOTAL_SYMBOLS} stock symbols`);
       console.log(`📋 Managing ${CONFIG.TABLE_ELEMENTS} table elements`);
       console.log(`🏠 Homepage updates enabled`);
+      console.log(`📈 Chart updates: every ${CONFIG.CHART_UPDATE_INTERVAL}ms`);
+      console.log(`🕯️  Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
       console.log(`🔄 Update interval: ${CONFIG.UPDATE_INTERVAL}ms`);
       console.log(`📡 Broadcast interval: ${CONFIG.BROADCAST_INTERVAL}ms`);
       console.log(`📤 Table updates: ${CONFIG.TABLE_UPDATES_PER_SECOND}/second`);
