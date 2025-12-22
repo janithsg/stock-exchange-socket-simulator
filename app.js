@@ -18,11 +18,18 @@ const CONFIG = {
   // Homepage update configuration
   HOMEPAGE_UPDATE_INTERVAL: 3000, // How often to send homepage updates (ms)
   
-  // Chart update configuration
-  CHART_UPDATE_INTERVAL: 500,     // How often to send chart updates (ms)
-  CHART_CANDLE_DURATION: 1000,    // Duration of each candle in ms (1 second)
+  // Chart update configuration - REALISTIC SETTINGS
+  CHART_UPDATE_INTERVAL: 1000,    // How often to send chart updates (1 second)
+  CHART_CANDLE_DURATION: 5000,    // Duration of each candle (5 seconds for visible movement)
   CHART_BASE_PRICE: 150,          // Starting price for the chart
-  CHART_VOLATILITY: 0.02,         // Price volatility (2%)
+  CHART_VOLATILITY: 0.003,        // Realistic volatility (0.3% per tick)
+  CHART_HISTORY_SIZE: 100,        // Maximum number of historical candles to keep
+  CHART_TICKS_PER_CANDLE: 5,      // Number of price updates within each candle
+  
+  // Realistic market behavior
+  TREND_CHANGE_PROBABILITY: 0.02, // 2% chance to change trend each tick
+  STRONG_MOVE_PROBABILITY: 0.05,  // 5% chance of larger price movement
+  MEAN_REVERSION_FACTOR: 0.1,     // Pull towards base price (10%)
 };
 
 // ============================================
@@ -31,9 +38,6 @@ const CONFIG = {
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-
-// Note: Install nodemon as dev dependency
-// npm install --save-dev nodemon
 
 // ============================================
 // SERVER SETUP
@@ -56,11 +60,14 @@ let tableUpdateQueue = [];
 let currentTableIndex = 0;
 let homepageData = null;
 
-// Chart data storage
+// Chart data storage - ENHANCED FOR REALISM
 let chartData = [];
 let currentCandle = null;
 let candleStartTime = null;
 let lastPrice = CONFIG.CHART_BASE_PRICE;
+let currentTrend = 0; // -1: bearish, 0: neutral, 1: bullish
+let trendStrength = 0; // 0-1: how strong the trend is
+let tickCount = 0; // Tracks ticks within current candle
 
 // Interval tracking
 let stockUpdateInterval = null;
@@ -71,6 +78,9 @@ let chartUpdateInterval = null;
 
 // Connected clients tracking
 let connectedClients = 0;
+
+// Track which clients have received initial chart data
+const clientChartStatus = new Map();
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -247,18 +257,54 @@ function getRandomIndices(count, max) {
 }
 
 // ============================================
-// CHART FUNCTIONS
+// REALISTIC CHART FUNCTIONS
 // ============================================
 
 /**
- * Generates a new price based on last price with random walk
+ * Updates market trend with realistic behavior
+ */
+function updateMarketTrend() {
+  // Random trend changes
+  if (Math.random() < CONFIG.TREND_CHANGE_PROBABILITY) {
+    const trends = [-1, 0, 1];
+    currentTrend = trends[Math.floor(Math.random() * trends.length)];
+    trendStrength = Math.random() * 0.5 + 0.3; // 0.3 to 0.8
+    console.log(`📊 Trend changed: ${currentTrend === 1 ? 'Bullish' : currentTrend === -1 ? 'Bearish' : 'Neutral'} (strength: ${trendStrength.toFixed(2)})`);
+  }
+  
+  // Gradually decay trend strength
+  trendStrength *= 0.98;
+}
+
+/**
+ * Generates a realistic price based on market conditions
  * @param {number} lastPrice - Previous price
  * @returns {number} New price
  */
-function generateNewPrice(lastPrice) {
-  const change = (Math.random() * 2 - 1) * CONFIG.CHART_VOLATILITY;
-  const newPrice = lastPrice * (1 + change);
-  return parseFloat(newPrice.toFixed(2));
+function generateRealisticPrice(lastPrice) {
+  updateMarketTrend();
+  
+  // Base random walk
+  let randomComponent = (Math.random() * 2 - 1) * CONFIG.CHART_VOLATILITY;
+  
+  // Add trend component
+  const trendComponent = currentTrend * trendStrength * CONFIG.CHART_VOLATILITY * 0.5;
+  
+  // Mean reversion (pull back towards base price)
+  const deviation = (lastPrice - CONFIG.CHART_BASE_PRICE) / CONFIG.CHART_BASE_PRICE;
+  const meanReversionComponent = -deviation * CONFIG.MEAN_REVERSION_FACTOR * CONFIG.CHART_VOLATILITY;
+  
+  // Occasional strong moves (simulate news events, large orders)
+  if (Math.random() < CONFIG.STRONG_MOVE_PROBABILITY) {
+    randomComponent *= 3;
+  }
+  
+  // Combine all components
+  const totalChange = randomComponent + trendComponent + meanReversionComponent;
+  const newPrice = lastPrice * (1 + totalChange);
+  
+  // Ensure price stays positive and reasonable
+  return parseFloat(Math.max(CONFIG.CHART_BASE_PRICE * 0.5, Math.min(CONFIG.CHART_BASE_PRICE * 2, newPrice)).toFixed(2));
 }
 
 /**
@@ -267,6 +313,7 @@ function generateNewPrice(lastPrice) {
 function initializeCandle() {
   const now = Date.now();
   candleStartTime = now;
+  tickCount = 0;
   
   currentCandle = {
     time: Math.floor(now / 1000), // Unix timestamp in seconds
@@ -275,6 +322,8 @@ function initializeCandle() {
     low: lastPrice,
     close: lastPrice,
   };
+  
+  console.log(`🕯️  New candle started at ${lastPrice.toFixed(2)} (time: ${currentCandle.time})`);
 }
 
 /**
@@ -289,6 +338,8 @@ function updateCurrentCandle(price) {
   currentCandle.close = price;
   currentCandle.high = Math.max(currentCandle.high, price);
   currentCandle.low = Math.min(currentCandle.low, price);
+  
+  tickCount++;
 }
 
 /**
@@ -305,11 +356,26 @@ function shouldCompleteCandle() {
  */
 function completeCandle() {
   if (currentCandle) {
-    // Add completed candle to history
-    chartData.push({ ...currentCandle });
+    // Ensure OHLC relationships are correct
+    const { open, high, low, close } = currentCandle;
     
-    // Keep only last 100 candles
-    if (chartData.length > 100) {
+    // Validate candle data
+    if (high < Math.max(open, close) || low > Math.min(open, close)) {
+      console.warn('⚠️  Invalid candle data detected, fixing...');
+      currentCandle.high = Math.max(open, close, high);
+      currentCandle.low = Math.min(open, close, low);
+    }
+    
+    // Add completed candle to history
+    const completedCandle = { ...currentCandle };
+    chartData.push(completedCandle);
+    
+    const changePercent = ((close - open) / open * 100).toFixed(2);
+    const candleType = close >= open ? '🟢' : '🔴';
+    console.log(`✅ Candle completed: ${candleType} O:${open.toFixed(2)} H:${high.toFixed(2)} L:${low.toFixed(2)} C:${close.toFixed(2)} (${changePercent}%)`);
+    
+    // Keep only last N candles
+    if (chartData.length > CONFIG.CHART_HISTORY_SIZE) {
       chartData.shift();
     }
     
@@ -320,24 +386,42 @@ function completeCandle() {
 }
 
 /**
- * Generates initial historical chart data
+ * Generates initial historical chart data with realistic patterns
  */
 function initializeChartData() {
-  console.log('Initializing chart data...');
+  console.log('Initializing realistic chart data...');
   
   const now = Date.now();
-  const candlesCount = 50; // Generate 50 historical candles
+  const candlesCount = 60; // Generate 60 historical candles
   
   chartData = [];
   let price = CONFIG.CHART_BASE_PRICE;
   
+  // Create some initial trend
+  currentTrend = Math.random() > 0.5 ? 1 : -1;
+  trendStrength = Math.random() * 0.5 + 0.3;
+  
   for (let i = candlesCount; i > 0; i--) {
     const candleTime = Math.floor((now - (i * CONFIG.CHART_CANDLE_DURATION)) / 1000);
     
+    // Simulate multiple ticks within the candle for realistic OHLC
+    const ticksInCandle = CONFIG.CHART_TICKS_PER_CANDLE;
     const open = price;
-    const close = generateNewPrice(open);
-    const high = Math.max(open, close) * (1 + Math.random() * 0.01);
-    const low = Math.min(open, close) * (1 - Math.random() * 0.01);
+    let high = open;
+    let low = open;
+    let close = open;
+    
+    for (let tick = 0; tick < ticksInCandle; tick++) {
+      const tickPrice = generateRealisticPrice(close);
+      close = tickPrice;
+      high = Math.max(high, tickPrice);
+      low = Math.min(low, tickPrice);
+    }
+    
+    // Add some wick to make candles more realistic
+    const wickSize = (high - low) * 0.1;
+    high = high + wickSize * Math.random();
+    low = low - wickSize * Math.random();
     
     chartData.push({
       time: candleTime,
@@ -348,21 +432,28 @@ function initializeChartData() {
     });
     
     price = close;
+    
+    // Change trend occasionally during history generation
+    if (Math.random() < 0.1) {
+      currentTrend = Math.random() > 0.5 ? 1 : -1;
+      trendStrength = Math.random() * 0.5 + 0.3;
+    }
   }
   
   lastPrice = price;
   initializeCandle();
   
-  console.log(`Chart data initialized with ${chartData.length} candles`);
+  console.log(`Chart data initialized with ${chartData.length} realistic candles`);
   console.log(`Starting price: ${CONFIG.CHART_BASE_PRICE}, Current price: ${lastPrice.toFixed(2)}`);
+  console.log(`Initial trend: ${currentTrend === 1 ? 'Bullish' : 'Bearish'} (strength: ${trendStrength.toFixed(2)})`);
 }
 
 /**
- * Updates chart data and emits to clients
+ * Updates chart data with realistic price movement
  */
 function updateChartData() {
-  // Generate new price
-  const newPrice = generateNewPrice(lastPrice);
+  // Generate new realistic price
+  const newPrice = generateRealisticPrice(lastPrice);
   
   // Update current candle
   updateCurrentCandle(newPrice);
@@ -376,6 +467,41 @@ function updateChartData() {
 }
 
 /**
+ * Sends initial chart data to a specific client (all historical + current candle)
+ * @param {object} socket - Socket.io socket object
+ */
+function sendInitialChartData(socket) {
+  const initialChartData = [...chartData];
+  if (currentCandle) {
+    initialChartData.push(currentCandle);
+  }
+  
+  console.log(`📊 Sending initial chart data to ${socket.id}: ${initialChartData.length} candles`);
+  socket.emit('chart_update', initialChartData);
+  
+  // Mark this client as having received initial data
+  clientChartStatus.set(socket.id, true);
+}
+
+/**
+ * Broadcasts chart update to clients (only current candle for those who have initial data)
+ */
+function broadcastChartUpdate() {
+  if (!currentCandle) return;
+  
+  // For clients who have received initial data, send only the current candle
+  io.sockets.sockets.forEach((socket) => {
+    if (clientChartStatus.get(socket.id)) {
+      // Client has initial data - send only current candle for incremental update
+      socket.emit('chart_update', [currentCandle]);
+    } else {
+      // Client hasn't received initial data yet - send full history
+      sendInitialChartData(socket);
+    }
+  });
+}
+
+/**
  * Clears chart data to reduce memory
  */
 function clearChartData() {
@@ -384,6 +510,10 @@ function clearChartData() {
   currentCandle = null;
   candleStartTime = null;
   lastPrice = CONFIG.CHART_BASE_PRICE;
+  currentTrend = 0;
+  trendStrength = 0;
+  tickCount = 0;
+  clientChartStatus.clear();
 }
 
 // ============================================
@@ -411,9 +541,6 @@ function initializeStocks() {
   });
   
   console.log('Stock symbols initialized successfully');
-  console.log(`Sample: ${stockSymbols[0].symbol_name} - ${stockSymbols[0].name}`);
-  console.log(`  Buy: ${stockSymbols[0].buy_value} (${stockSymbols[0].buy_change})`);
-  console.log(`  Sell: ${stockSymbols[0].sell_value} (${stockSymbols[0].sell_change})`);
 }
 
 /**
@@ -430,9 +557,6 @@ function initializeTableElements() {
   tableUpdateQueue = [...tableElements];
   
   console.log('Table elements initialized successfully');
-  console.log(`Sample: ${tableElements[0].symbol_code} - ${tableElements[0].symbol_name}`);
-  console.log(`  Price: ${tableElements[0].price} (${tableElements[0].change})`);
-  console.log(`  Last Order: ${tableElements[0].last_order_qty} @ ${tableElements[0].last_order_value}`);
 }
 
 /**
@@ -518,7 +642,6 @@ function initializeHomepageData() {
   };
   
   console.log('Homepage data initialized successfully');
-  console.log(`Sample: Main Balance: ${homepageData.main_balance}, Market Value: ${homepageData.market_value}`);
 }
 
 /**
@@ -716,18 +839,12 @@ function startChartUpdates() {
   
   chartUpdateInterval = setInterval(() => {
     updateChartData();
-    
-    // Emit current candle plus all historical data
-    const dataToSend = [...chartData];
-    if (currentCandle) {
-      dataToSend.push(currentCandle);
-    }
-    
-    io.emit('chart_update', dataToSend);
+    broadcastChartUpdate();
   }, CONFIG.CHART_UPDATE_INTERVAL);
   
   console.log(`Chart updates started (every ${CONFIG.CHART_UPDATE_INTERVAL}ms)`);
   console.log(`Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
+  console.log(`📊 REALISTIC MODE: Trend-following with mean reversion`);
 }
 
 /**
@@ -804,16 +921,15 @@ io.on('connection', (socket) => {
   socket.emit('stock_update', stockSymbols);
   socket.emit('homepage_updates', homepageData);
   
-  // Send initial chart data
-  const initialChartData = [...chartData];
-  if (currentCandle) {
-    initialChartData.push(currentCandle);
-  }
-  socket.emit('chart_update', initialChartData);
+  // Send initial chart data (full history)
+  sendInitialChartData(socket);
   
   socket.on('disconnect', () => {
     connectedClients--;
     console.log(`Client disconnected: ${socket.id} (Total clients: ${connectedClients})`);
+    
+    // Remove from chart status tracking
+    clientChartStatus.delete(socket.id);
     
     // Stop updates and clear data if no clients are connected
     if (connectedClients === 0) {
@@ -823,23 +939,22 @@ io.on('connection', (socket) => {
     }
   });
   
-  // Optional: Handle client requests for specific stocks
+  // Handle client requests for specific stocks
   socket.on('get_stocks', () => {
+    console.log(`📊 Client ${socket.id} requested stock data`);
     socket.emit('stock_update', stockSymbols);
   });
   
-  // Optional: Handle client requests for homepage data
+  // Handle client requests for homepage data
   socket.on('get_homepage', () => {
+    console.log(`🏠 Client ${socket.id} requested homepage data`);
     socket.emit('homepage_updates', homepageData);
   });
   
-  // Optional: Handle client requests for chart data
+  // Handle client requests for chart data
   socket.on('get_chart', () => {
-    const chartDataToSend = [...chartData];
-    if (currentCandle) {
-      chartDataToSend.push(currentCandle);
-    }
-    socket.emit('chart_update', chartDataToSend);
+    console.log(`📈 Client ${socket.id} requested chart data`);
+    sendInitialChartData(socket);
   });
 });
 
@@ -849,7 +964,7 @@ io.on('connection', (socket) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'Stock Exchange Simulator API',
+    message: 'Stock Exchange Simulator API - Realistic Chart Data',
     status: 'running',
     connectedClients: connectedClients,
     dataGenerationActive: connectedClients > 0,
@@ -862,7 +977,22 @@ app.get('/', (req, res) => {
       tableUpdatesPerSecond: CONFIG.TABLE_UPDATES_PER_SECOND,
       homepageUpdateInterval: `${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`,
       chartUpdateInterval: `${CONFIG.CHART_UPDATE_INTERVAL}ms`,
-      candleDuration: `${CONFIG.CHART_CANDLE_DURATION}ms`
+      candleDuration: `${CONFIG.CHART_CANDLE_DURATION}ms`,
+      chartHistorySize: CONFIG.CHART_HISTORY_SIZE,
+      volatility: `${(CONFIG.CHART_VOLATILITY * 100).toFixed(2)}%`,
+      ticksPerCandle: CONFIG.CHART_TICKS_PER_CANDLE
+    },
+    realisticFeatures: {
+      trendFollowing: 'Market follows bullish/bearish trends',
+      meanReversion: 'Prices tend to return to base price',
+      strongMoves: 'Occasional large price movements',
+      smoothOHLC: 'Multiple ticks create realistic candles'
+    },
+    chartOptimization: {
+      strategy: 'Initial full load + incremental updates',
+      initialLoad: 'All historical candles + current candle',
+      incrementalUpdate: 'Only current candle',
+      performance: 'Reduced bandwidth and CPU usage'
     },
     endpoints: {
       socketio: 'Connect via Socket.IO for real-time updates',
@@ -870,12 +1000,8 @@ app.get('/', (req, res) => {
         stock_update: 'Batch stock updates',
         table_update: 'Individual table element updates',
         homepage_updates: 'Homepage data updates',
-        chart_update: 'Candlestick chart updates (every 200ms)'
+        chart_update: 'Realistic chart updates (initial: full, then: incremental)'
       }
-    },
-    optimization: {
-      note: 'Data generation only runs when clients are connected',
-      currentState: connectedClients > 0 ? 'Active' : 'Idle (no memory usage)'
     }
   });
 });
@@ -897,7 +1023,13 @@ app.get('/chart', (req, res) => {
     count: chartDataToSend.length,
     data: chartDataToSend,
     currentPrice: lastPrice,
-    dataGenerationActive: connectedClients > 0
+    currentTrend: currentTrend === 1 ? 'Bullish' : currentTrend === -1 ? 'Bearish' : 'Neutral',
+    trendStrength: trendStrength.toFixed(2),
+    dataGenerationActive: connectedClients > 0,
+    optimization: {
+      strategy: 'Initial clients get full history, subsequent updates are incremental',
+      trackedClients: clientChartStatus.size
+    }
   });
 });
 
@@ -907,6 +1039,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     connectedClients: connectedClients,
     dataGenerationActive: connectedClients > 0,
+    chartClientsTracked: clientChartStatus.size,
     memoryUsage: process.memoryUsage()
   });
 });
@@ -919,6 +1052,7 @@ app.get('/stats', (req, res) => {
       stockSymbols: stockSymbols.length,
       tableElements: tableElements.length,
       chartData: chartData.length,
+      chartClientsTracked: clientChartStatus.size,
       homepageDataInitialized: homepageData !== null
     },
     activeIntervals: {
@@ -927,6 +1061,15 @@ app.get('/stats', (req, res) => {
       tableUpdate: tableUpdateInterval !== null,
       homepageUpdate: homepageUpdateInterval !== null,
       chartUpdate: chartUpdateInterval !== null
+    },
+    chartState: {
+      currentCandle: currentCandle ? 'Active' : 'Not started',
+      lastPrice: lastPrice.toFixed(2),
+      currentTrend: currentTrend === 1 ? 'Bullish' : currentTrend === -1 ? 'Bearish' : 'Neutral',
+      trendStrength: trendStrength.toFixed(2),
+      ticksInCurrentCandle: tickCount,
+      candleStartTime: candleStartTime,
+      historySize: chartData.length
     },
     memoryUsage: process.memoryUsage()
   });
@@ -939,23 +1082,29 @@ app.get('/stats', (req, res) => {
 async function startServer() {
   try {
     // Don't initialize data on startup - wait for first client
-    console.log('Server starting in optimized mode - data generation will begin when first client connects');
+    console.log('Server starting in optimized mode with REALISTIC chart generation');
     
     // Start server
     server.listen(CONFIG.PORT, () => {
-      console.log('='.repeat(50));
-      console.log(`🚀 Stock Exchange Simulator running on port ${CONFIG.PORT}`);
-      console.log(`⚡ OPTIMIZED MODE: Data generation starts only when clients connect`);
+      console.log('='.repeat(70));
+      console.log(`🚀 Stock Exchange Simulator - REALISTIC MODE`);
+      console.log(`📍 Running on port ${CONFIG.PORT}`);
+      console.log(`⚡ OPTIMIZED: Data generation starts only when clients connect`);
       console.log(`📊 Will manage ${CONFIG.TOTAL_SYMBOLS} stock symbols when active`);
       console.log(`📋 Will manage ${CONFIG.TABLE_ELEMENTS} table elements when active`);
       console.log(`🏠 Homepage updates: every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`);
       console.log(`📈 Chart updates: every ${CONFIG.CHART_UPDATE_INTERVAL}ms`);
-      console.log(`🕯️  Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
-      console.log(`🔄 Update interval: ${CONFIG.UPDATE_INTERVAL}ms`);
-      console.log(`📡 Broadcast interval: ${CONFIG.BROADCAST_INTERVAL}ms`);
-      console.log(`📤 Table updates: ${CONFIG.TABLE_UPDATES_PER_SECOND}/second`);
+      console.log(`🕯️  Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms (${CONFIG.CHART_CANDLE_DURATION/1000}s)`);
+      console.log(`📉 Volatility: ${(CONFIG.CHART_VOLATILITY * 100).toFixed(2)}% per tick`);
+      console.log(`🎯 Ticks per candle: ${CONFIG.CHART_TICKS_PER_CANDLE}`);
+      console.log(`🌊 REALISTIC FEATURES:`);
+      console.log(`   • Trend-following behavior (bullish/bearish)`);
+      console.log(`   • Mean reversion towards base price`);
+      console.log(`   • Occasional strong moves (news/orders simulation)`);
+      console.log(`   • Smooth OHLC relationships`);
+      console.log(`🎯 CHART OPTIMIZATION: Initial full load + incremental updates`);
       console.log(`💤 Currently IDLE - waiting for client connections`);
-      console.log('='.repeat(50));
+      console.log('='.repeat(70));
     });
   } catch (error) {
     console.error('Failed to start server:', error);
