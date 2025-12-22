@@ -19,7 +19,7 @@ const CONFIG = {
   HOMEPAGE_UPDATE_INTERVAL: 3000, // How often to send homepage updates (ms)
   
   // Chart update configuration
-  CHART_UPDATE_INTERVAL: 200,     // How often to send chart updates (ms)
+  CHART_UPDATE_INTERVAL: 500,     // How often to send chart updates (ms)
   CHART_CANDLE_DURATION: 1000,    // Duration of each candle in ms (1 second)
   CHART_BASE_PRICE: 150,          // Starting price for the chart
   CHART_VOLATILITY: 0.02,         // Price volatility (2%)
@@ -61,6 +61,16 @@ let chartData = [];
 let currentCandle = null;
 let candleStartTime = null;
 let lastPrice = CONFIG.CHART_BASE_PRICE;
+
+// Interval tracking
+let stockUpdateInterval = null;
+let broadcastInterval = null;
+let tableUpdateInterval = null;
+let homepageUpdateInterval = null;
+let chartUpdateInterval = null;
+
+// Connected clients tracking
+let connectedClients = 0;
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -366,23 +376,14 @@ function updateChartData() {
 }
 
 /**
- * Starts chart updates at configured interval
+ * Clears chart data to reduce memory
  */
-function startChartUpdates() {
-  setInterval(() => {
-    updateChartData();
-    
-    // Emit current candle plus all historical data
-    const dataToSend = [...chartData];
-    if (currentCandle) {
-      dataToSend.push(currentCandle);
-    }
-    
-    io.emit('chart_update', dataToSend);
-  }, CONFIG.CHART_UPDATE_INTERVAL);
-  
-  console.log(`Chart updates started (every ${CONFIG.CHART_UPDATE_INTERVAL}ms)`);
-  console.log(`Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
+function clearChartData() {
+  console.log('Clearing chart data...');
+  chartData = [];
+  currentCandle = null;
+  candleStartTime = null;
+  lastPrice = CONFIG.CHART_BASE_PRICE;
 }
 
 // ============================================
@@ -392,7 +393,7 @@ function startChartUpdates() {
 /**
  * Initializes all stock symbols with default values
  */
-async function initializeStocks() {
+function initializeStocks() {
   console.log(`Initializing ${CONFIG.TOTAL_SYMBOLS} stock symbols...`);
   
   stockSymbols = Array.from({ length: CONFIG.TOTAL_SYMBOLS }, (_, index) => {
@@ -418,7 +419,7 @@ async function initializeStocks() {
 /**
  * Initializes table elements
  */
-async function initializeTableElements() {
+function initializeTableElements() {
   console.log(`Initializing ${CONFIG.TABLE_ELEMENTS} table elements...`);
   
   tableElements = Array.from({ length: CONFIG.TABLE_ELEMENTS }, (_, index) => 
@@ -437,7 +438,7 @@ async function initializeTableElements() {
 /**
  * Initializes homepage data with default values
  */
-async function initializeHomepageData() {
+function initializeHomepageData() {
   console.log('Initializing homepage data...');
   
   homepageData = {
@@ -520,6 +521,19 @@ async function initializeHomepageData() {
   console.log(`Sample: Main Balance: ${homepageData.main_balance}, Market Value: ${homepageData.market_value}`);
 }
 
+/**
+ * Clears all data arrays to reduce memory
+ */
+function clearAllData() {
+  console.log('Clearing all data arrays...');
+  stockSymbols = [];
+  tableElements = [];
+  tableUpdateQueue = [];
+  homepageData = null;
+  clearChartData();
+  console.log('All data cleared');
+}
+
 // ============================================
 // STOCK UPDATE LOGIC
 // ============================================
@@ -527,8 +541,12 @@ async function initializeHomepageData() {
 /**
  * Updates random stocks at configured interval
  */
-async function startStockUpdates() {
-  setInterval(() => {
+function startStockUpdates() {
+  if (stockUpdateInterval) {
+    clearInterval(stockUpdateInterval);
+  }
+  
+  stockUpdateInterval = setInterval(() => {
     const randomIndices = getRandomIndices(
       CONFIG.STOCKS_TO_UPDATE,
       stockSymbols.length
@@ -543,10 +561,25 @@ async function startStockUpdates() {
 }
 
 /**
+ * Stops stock updates
+ */
+function stopStockUpdates() {
+  if (stockUpdateInterval) {
+    clearInterval(stockUpdateInterval);
+    stockUpdateInterval = null;
+    console.log('Stock update process stopped');
+  }
+}
+
+/**
  * Broadcasts stock data to all connected clients
  */
-async function startBroadcasting() {
-  setInterval(() => {
+function startBroadcasting() {
+  if (broadcastInterval) {
+    clearInterval(broadcastInterval);
+  }
+  
+  broadcastInterval = setInterval(() => {
     io.emit('stock_update', stockSymbols);
   }, CONFIG.BROADCAST_INTERVAL);
   
@@ -554,12 +587,27 @@ async function startBroadcasting() {
 }
 
 /**
+ * Stops broadcasting
+ */
+function stopBroadcasting() {
+  if (broadcastInterval) {
+    clearInterval(broadcastInterval);
+    broadcastInterval = null;
+    console.log('Broadcasting stopped');
+  }
+}
+
+/**
  * Broadcasts table updates one by one at configured rate
  */
-async function startTableUpdates() {
+function startTableUpdates() {
+  if (tableUpdateInterval) {
+    clearInterval(tableUpdateInterval);
+  }
+  
   const intervalMs = 1000 / CONFIG.TABLE_UPDATES_PER_SECOND;
   
-  setInterval(() => {
+  tableUpdateInterval = setInterval(() => {
     if (tableUpdateQueue.length === 0) {
       // Regenerate queue when empty
       tableUpdateQueue = [...tableElements].map(el => ({
@@ -584,9 +632,22 @@ async function startTableUpdates() {
 }
 
 /**
+ * Stops table updates
+ */
+function stopTableUpdates() {
+  if (tableUpdateInterval) {
+    clearInterval(tableUpdateInterval);
+    tableUpdateInterval = null;
+    console.log('Table updates stopped');
+  }
+}
+
+/**
  * Updates homepage data with new random values
  */
 function updateHomepageData() {
+  if (!homepageData) return;
+  
   homepageData.main_balance = randomInRange(17200, 18300, 2);
   homepageData.market_value = randomInRange(10600, 10700, 2);
   
@@ -621,8 +682,12 @@ function updateHomepageData() {
 /**
  * Broadcasts homepage updates at configured interval
  */
-async function startHomepageUpdates() {
-  setInterval(() => {
+function startHomepageUpdates() {
+  if (homepageUpdateInterval) {
+    clearInterval(homepageUpdateInterval);
+  }
+  
+  homepageUpdateInterval = setInterval(() => {
     updateHomepageData();
     io.emit('homepage_updates', homepageData);
   }, CONFIG.HOMEPAGE_UPDATE_INTERVAL);
@@ -630,12 +695,110 @@ async function startHomepageUpdates() {
   console.log(`Homepage updates started (every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms)`);
 }
 
+/**
+ * Stops homepage updates
+ */
+function stopHomepageUpdates() {
+  if (homepageUpdateInterval) {
+    clearInterval(homepageUpdateInterval);
+    homepageUpdateInterval = null;
+    console.log('Homepage updates stopped');
+  }
+}
+
+/**
+ * Starts chart updates at configured interval
+ */
+function startChartUpdates() {
+  if (chartUpdateInterval) {
+    clearInterval(chartUpdateInterval);
+  }
+  
+  chartUpdateInterval = setInterval(() => {
+    updateChartData();
+    
+    // Emit current candle plus all historical data
+    const dataToSend = [...chartData];
+    if (currentCandle) {
+      dataToSend.push(currentCandle);
+    }
+    
+    io.emit('chart_update', dataToSend);
+  }, CONFIG.CHART_UPDATE_INTERVAL);
+  
+  console.log(`Chart updates started (every ${CONFIG.CHART_UPDATE_INTERVAL}ms)`);
+  console.log(`Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
+}
+
+/**
+ * Stops chart updates
+ */
+function stopChartUpdates() {
+  if (chartUpdateInterval) {
+    clearInterval(chartUpdateInterval);
+    chartUpdateInterval = null;
+    console.log('Chart updates stopped');
+  }
+}
+
+/**
+ * Starts all update processes
+ */
+function startAllUpdates() {
+  console.log('Starting all update processes...');
+  
+  // Initialize data if not already initialized
+  if (stockSymbols.length === 0) {
+    initializeStocks();
+  }
+  if (tableElements.length === 0) {
+    initializeTableElements();
+  }
+  if (!homepageData) {
+    initializeHomepageData();
+  }
+  if (chartData.length === 0) {
+    initializeChartData();
+  }
+  
+  // Start all update processes
+  startStockUpdates();
+  startBroadcasting();
+  startTableUpdates();
+  startHomepageUpdates();
+  startChartUpdates();
+  
+  console.log('All update processes started');
+}
+
+/**
+ * Stops all update processes
+ */
+function stopAllUpdates() {
+  console.log('Stopping all update processes...');
+  
+  stopStockUpdates();
+  stopBroadcasting();
+  stopTableUpdates();
+  stopHomepageUpdates();
+  stopChartUpdates();
+  
+  console.log('All update processes stopped');
+}
+
 // ============================================
 // SOCKET.IO EVENTS
 // ============================================
 
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  connectedClients++;
+  console.log(`Client connected: ${socket.id} (Total clients: ${connectedClients})`);
+  
+  // Start updates if this is the first client
+  if (connectedClients === 1) {
+    console.log('First client connected - starting data generation');
+    startAllUpdates();
+  }
   
   // Send initial data immediately on connection
   socket.emit('stock_update', stockSymbols);
@@ -649,7 +812,15 @@ io.on('connection', (socket) => {
   socket.emit('chart_update', initialChartData);
   
   socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+    connectedClients--;
+    console.log(`Client disconnected: ${socket.id} (Total clients: ${connectedClients})`);
+    
+    // Stop updates and clear data if no clients are connected
+    if (connectedClients === 0) {
+      console.log('No clients connected - stopping data generation and clearing memory');
+      stopAllUpdates();
+      clearAllData();
+    }
   });
   
   // Optional: Handle client requests for specific stocks
@@ -680,6 +851,8 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Stock Exchange Simulator API',
     status: 'running',
+    connectedClients: connectedClients,
+    dataGenerationActive: connectedClients > 0,
     config: {
       totalSymbols: CONFIG.TOTAL_SYMBOLS,
       updateInterval: `${CONFIG.UPDATE_INTERVAL}ms`,
@@ -699,6 +872,10 @@ app.get('/', (req, res) => {
         homepage_updates: 'Homepage data updates',
         chart_update: 'Candlestick chart updates (every 200ms)'
       }
+    },
+    optimization: {
+      note: 'Data generation only runs when clients are connected',
+      currentState: connectedClients > 0 ? 'Active' : 'Idle (no memory usage)'
     }
   });
 });
@@ -706,7 +883,8 @@ app.get('/', (req, res) => {
 app.get('/stocks', (req, res) => {
   res.json({
     count: stockSymbols.length,
-    stocks: stockSymbols
+    stocks: stockSymbols,
+    dataGenerationActive: connectedClients > 0
   });
 });
 
@@ -718,12 +896,40 @@ app.get('/chart', (req, res) => {
   res.json({
     count: chartDataToSend.length,
     data: chartDataToSend,
-    currentPrice: lastPrice
+    currentPrice: lastPrice,
+    dataGenerationActive: connectedClients > 0
   });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    connectedClients: connectedClients,
+    dataGenerationActive: connectedClients > 0,
+    memoryUsage: process.memoryUsage()
+  });
+});
+
+app.get('/stats', (req, res) => {
+  res.json({
+    connectedClients: connectedClients,
+    dataGenerationActive: connectedClients > 0,
+    dataArraySizes: {
+      stockSymbols: stockSymbols.length,
+      tableElements: tableElements.length,
+      chartData: chartData.length,
+      homepageDataInitialized: homepageData !== null
+    },
+    activeIntervals: {
+      stockUpdate: stockUpdateInterval !== null,
+      broadcast: broadcastInterval !== null,
+      tableUpdate: tableUpdateInterval !== null,
+      homepageUpdate: homepageUpdateInterval !== null,
+      chartUpdate: chartUpdateInterval !== null
+    },
+    memoryUsage: process.memoryUsage()
+  });
 });
 
 // ============================================
@@ -732,38 +938,23 @@ app.get('/health', (req, res) => {
 
 async function startServer() {
   try {
-    // Initialize stocks
-    await initializeStocks();
-    
-    // Initialize table elements
-    await initializeTableElements();
-    
-    // Initialize homepage data
-    await initializeHomepageData();
-    
-    // Initialize chart data
-    initializeChartData();
-    
-    // Start background processes
-    await startStockUpdates();
-    await startBroadcasting();
-    await startTableUpdates();
-    await startHomepageUpdates();
-    startChartUpdates();
+    // Don't initialize data on startup - wait for first client
+    console.log('Server starting in optimized mode - data generation will begin when first client connects');
     
     // Start server
     server.listen(CONFIG.PORT, () => {
       console.log('='.repeat(50));
       console.log(`🚀 Stock Exchange Simulator running on port ${CONFIG.PORT}`);
-      console.log(`📊 Managing ${CONFIG.TOTAL_SYMBOLS} stock symbols`);
-      console.log(`📋 Managing ${CONFIG.TABLE_ELEMENTS} table elements`);
-      console.log(`🏠 Homepage updates enabled`);
+      console.log(`⚡ OPTIMIZED MODE: Data generation starts only when clients connect`);
+      console.log(`📊 Will manage ${CONFIG.TOTAL_SYMBOLS} stock symbols when active`);
+      console.log(`📋 Will manage ${CONFIG.TABLE_ELEMENTS} table elements when active`);
+      console.log(`🏠 Homepage updates: every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`);
       console.log(`📈 Chart updates: every ${CONFIG.CHART_UPDATE_INTERVAL}ms`);
       console.log(`🕯️  Candle duration: ${CONFIG.CHART_CANDLE_DURATION}ms`);
       console.log(`🔄 Update interval: ${CONFIG.UPDATE_INTERVAL}ms`);
       console.log(`📡 Broadcast interval: ${CONFIG.BROADCAST_INTERVAL}ms`);
       console.log(`📤 Table updates: ${CONFIG.TABLE_UPDATES_PER_SECOND}/second`);
-      console.log(`🏡 Homepage updates: every ${CONFIG.HOMEPAGE_UPDATE_INTERVAL}ms`);
+      console.log(`💤 Currently IDLE - waiting for client connections`);
       console.log('='.repeat(50));
     });
   } catch (error) {
@@ -781,6 +972,7 @@ startServer();
 
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  stopAllUpdates();
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
@@ -789,6 +981,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('\nSIGINT received, shutting down gracefully...');
+  stopAllUpdates();
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
